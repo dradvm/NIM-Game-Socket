@@ -15,14 +15,14 @@ const generatedIds = new Set();
 function generateRoomId() {
     let id;
     do {
-        id = Math.floor(1000 + Math.random() * 9000).toString(); // 4 chữ số
+        id = Math.floor(1000 + Math.random() * 9000).toString();
     } while (generatedIds.has(id));
 
     generatedIds.add(id);
     return id;
 }
 
-const rooms = []
+var rooms = []
 
 const findRoom = (roomId) => rooms.find((room) => room.id === roomId)
 const findRoomByUserId = (userId) => rooms.find((room) => {
@@ -34,6 +34,40 @@ const findRoomByUserId = (userId) => rooms.find((room) => {
     })
     return check
 });
+const findRoomByHostUserId = (userId) => rooms.find((room) => room.host.id === userId)
+const removeUser = (userId) => {
+    rooms.forEach((room) => {
+        if (room.clients.map((client) => client.id).includes(userId)) {
+            room.clients = room.clients.filter((client) => client.id !== userId)
+            io.to(room.id).emit("players", room.clients.map((client) => client.name))
+        }
+    })
+    rooms = rooms.filter((room) => room.clients.length !== 0)
+}
+const removeRoom = (room) => {
+    room.clients.forEach((client) => {
+        const clientSocket = io.sockets.sockets.get(client.id)
+        if (clientSocket) {
+            clientSocket.leave(room.id)
+            if (room.host.id !== client.id) {
+                clientSocket.emit("roomDeleted")
+            }
+        }
+    })
+    rooms = rooms.filter((r) => r !== room)
+}
+
+const exit = (socket) => {
+    var room = findRoomByHostUserId(socket.id)
+
+    if (room) {
+        removeRoom(room)
+    }
+    else {
+        removeUser(socket.id)
+    }
+    io.emit("loadRooms", rooms)
+}
 
 io.on("connection", (socket) => {
     console.log(`User connected: ${socket.id}`);
@@ -45,12 +79,12 @@ io.on("connection", (socket) => {
 
 
 
-    socket.on("createRoom", ({ username, roomname }) => {
-        console.log("Tạo phòng")
+    socket.on("createRoom", ({ username, roomname, level }) => {
         const roomId = generateRoomId()
-        const gonggis = Array(3).fill(0).map(() => Random.randomNumber(1, 3))
-        const roomDetail = {
+        const gonggis = Array(level.numberGonggiBox).fill(0).map(() => Random.randomNumber(1, level.numberGonggiBox))
+        const room = {
             id: roomId,
+            level: level,
             host: {
                 id: socket.id,
             },
@@ -61,23 +95,39 @@ io.on("connection", (socket) => {
                 name: username
             }],
             state: "Đang đợi",
-            gonggis: gonggis,
-            gonggiItems: gonggis.map((numberGonggi) => Array(numberGonggi).fill().map((_, i) => {
+            turn: true,
+            gonggis: gonggis.map((numberGonggi) => Array(numberGonggi).fill().map((_, i) => {
                 return {
                     index: i,
                     isVisible: true,
                     color: Random.randomColor(),
                     shape: Random.randomShape()
                 }
-            }))
+            })),
         }
-        rooms.push(roomDetail)
-        console.log(rooms)
+        rooms.push(room)
         socket.join(roomId)
-        socket.emit("loadRooms", rooms)
+        io.emit("loadRooms", rooms)
         socket.emit("joinedRoom", {
-            firstPlayer: true
+            firstPlayer: true,
+            level: room.level
         })
+    })
+
+    socket.on("resetGame", () => {
+        const room = findRoomByUserId(socket.id)
+        room.gonggis = Array(room.level.numberGonggiBox).fill(0).map(() => {
+            const randomSize = Random.randomNumber(1, room.level.numberGonggiBox)
+            return Array(randomSize).fill().map((_, i) => ({
+                index: i,
+                isVisible: true,
+                color: Random.randomColor(),
+                shape: Random.randomShape()
+            }));
+        })
+        io.to(room.id).emit("gonggis", room.gonggis)
+        room.turn = true
+        io.to(room.id).emit("turn", room.turn)
     })
 
     socket.on("joinRoom", ({ username, roomId }) => {
@@ -94,42 +144,55 @@ io.on("connection", (socket) => {
             }
 
             socket.join(roomId)
-            socket.emit("loadRooms", rooms)
+            io.emit("loadRooms", rooms)
             socket.emit("joinedRoom", {
-                firstPlayer: false
+                firstPlayer: false,
+                level: room.level
             })
+            io.to(room.id).emit("players", room.clients.map((client) => client.name))
         }
         else {
-            socket.emit("loadRoom")
+            io.emit("loadRooms", rooms)
         }
 
     })
 
     socket.on("getGonggis", () => {
         const room = findRoomByUserId(socket.id)
-        console.log(room.gonggis)
         socket.emit("gonggis", room.gonggis)
     })
 
-    socket.on("getGonggiItems", () => {
+    socket.on("getPlayers", () => {
         const room = findRoomByUserId(socket.id)
-        socket.emit("gonggiItems", room.gonggiItems)
+        io.to(room.id).emit("players", room.clients.map((client) => client.name))
     })
 
-    socket.on("selectGonggi", ({ newGonggis, newGonggiItems, indexBox }) => {
+
+    socket.on("selectGonggi", ({ index, indexBox }) => {
         const room = findRoomByUserId(socket.id)
-        room.gonggis = newGonggis
-        room.gonggiItems[indexBox] = newGonggiItems
-        socket.emit("gonggis", room.gonggis)
-        socket.emit("gonggiItems", room.gonggiItems)
+        room.gonggis[indexBox].forEach((gonggi) => {
+            if (gonggi.isVisible) {
+                gonggi.isVisible = room.turn ? !(gonggi.index <= index) : !(gonggi.index >= index)
+            }
+        })
+        room.turn = !room.turn
+        io.to(room.id).emit("turn", room.turn)
+        io.to(room.id).emit("gonggis", room.gonggis)
     })
 
-    // Xử lý khi người dùng ngắt kết nối
+    socket.on("quitRoom", () => {
+
+        exit(socket)
+
+
+    })
+
     socket.on("disconnect", () => {
+        exit(socket)
         console.log(`User disconnected: ${socket.id}`);
     });
 });
 
-server.listen(3002, () => {
-    console.log("Server is running on port 3002");
+server.listen(3001, () => {
+    console.log("Server is running on port 3003");
 });
