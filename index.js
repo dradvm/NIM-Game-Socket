@@ -58,6 +58,7 @@ const removeRoom = (room) => {
 }
 
 const exit = (socket) => {
+    resetGame(socket)
     var room = findRoomByHostUserId(socket.id)
 
     if (room) {
@@ -67,6 +68,24 @@ const exit = (socket) => {
         removeUser(socket.id)
     }
     io.emit("loadRooms", rooms)
+}
+
+const resetGame = (socket) => {
+    const room = findRoomByUserId(socket.id)
+    if (room) {
+        room.gonggis = Array(room.level.numberGonggiBox).fill(0).map(() => {
+            const randomSize = Random.randomNumber(1, room.level.numberGonggiBox)
+            return Array(randomSize).fill().map((_, i) => ({
+                index: i,
+                isVisible: true,
+                color: Random.randomColor(),
+                shape: Random.randomShape()
+            }));
+        })
+        io.to(room.id).emit("gonggis", room.gonggis)
+        room.turn = true
+        io.to(room.id).emit("turn", room.turn)
+    }
 }
 
 io.on("connection", (socket) => {
@@ -115,19 +134,7 @@ io.on("connection", (socket) => {
     })
 
     socket.on("resetGame", () => {
-        const room = findRoomByUserId(socket.id)
-        room.gonggis = Array(room.level.numberGonggiBox).fill(0).map(() => {
-            const randomSize = Random.randomNumber(1, room.level.numberGonggiBox)
-            return Array(randomSize).fill().map((_, i) => ({
-                index: i,
-                isVisible: true,
-                color: Random.randomColor(),
-                shape: Random.randomShape()
-            }));
-        })
-        io.to(room.id).emit("gonggis", room.gonggis)
-        room.turn = true
-        io.to(room.id).emit("turn", room.turn)
+        resetGame(socket)
     })
 
     socket.on("joinRoom", ({ username, roomId }) => {
@@ -184,7 +191,6 @@ io.on("connection", (socket) => {
 
         exit(socket)
 
-
     })
 
     socket.on("disconnect", () => {
@@ -194,5 +200,5 @@ io.on("connection", (socket) => {
 });
 
 server.listen(3001, () => {
-    console.log("Server is running on port 3003");
+    console.log("Server is running on port 3001");
 });
